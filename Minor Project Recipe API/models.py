@@ -41,14 +41,14 @@ class RecipeCreate(RecipeBase):
     recipe_method: str
     prep_time_in_min: int
 
-class RecipeUpdate(RecipeBase):
+class RecipeUpdate(SQLModel):
     '''
-    Data model to update recipe
+    Data model to update recipe. All fields are optional.
     '''
-    recipe_name: str 
-    recipe_choice: recipe_category
-    recipe_method: str
-    prep_time_in_min: int
+    recipe_name: Optional[str] = Field(default=None) 
+    recipe_choice: Optional[recipe_category] = Field(default=None)
+    recipe_method: Optional[str] = Field(default=None)
+    prep_time_in_min: Optional[int] = Field(default=None)
 
 
 class UserBase(SQLModel):
