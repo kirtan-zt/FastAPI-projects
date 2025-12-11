@@ -1,0 +1,237 @@
+from typing import List, Optional, Tuple, Dict, Any
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlmodel import select
+from sqlalchemy.orm import selectinload
+from fastapi import HTTPException, status
+from src.models.applications import Applications, ApplicationsCreate, ApplicationsUpdate
+from src.models.jobListings import Listings
+from src.models.jobSeekers import JobSeekers
+from src.models.users import User
+from src.core.exceptions import ApplicationNotFound, JobSeekerProfileNotFound, ListingNotFound, AuthorizationError
+from sqlalchemy.exc import SQLAlchemyError, IntegrityError
+
+def _validate_application_prerequisites_sync(session: AsyncSession, applicant_data: ApplicationsCreate) -> Tuple[Optional[Applications], Optional[str]]:
+    """
+    Synchronous validation checks for creating an application.
+    
+    Raises:
+        ListingNotFound: If the job listing does not exist.
+        JobSeekerProfileNotFound: If the job seeker profile does not exist.
+    
+    Returns:
+        Applications: The newly created Applications instance.
+    """ 
+   
+    # 1. Check for valid listing
+    listing_exists = session.get(Listings, applicant_data.listing_id)
+    if not listing_exists:
+        return None, ListingNotFound(applicant_data.listing_id)
+
+    # 2. Check for existing job seeker
+    seeker_exists = session.get(JobSeekers, applicant_data.job_seeker_id)
+    if not seeker_exists:
+        return None, JobSeekerProfileNotFound()
+
+    # Validation passed, create the model instance
+    db_applications = Applications.model_validate(applicant_data)
+    return db_applications, None
+
+def _update_application_data_sync(session: AsyncSession, application_id: int, update_data: Dict[str, Any]) -> Tuple[Optional[Applications], Optional[str], Optional[int]]:
+    """
+    Synchronous update logic for an existing application.
+    
+    Raises:
+        ApplicationNotFound: If the application does not exist.
+        
+    Returns:
+        Applications: The updated Applications instance.
+    """
+    application_update_db = session.get(Applications, application_id)
+    if not application_update_db:
+        return None, ApplicationNotFound(application_id)
+
+    # Dict unpacking for partial data update
+    temp_update = ApplicationsUpdate(**update_data)
+    update_data_dict = temp_update.model_dump(exclude_unset=True)
+    application_update_db.sqlmodel_update(update_data_dict)
+    return application_update_db, None, None
+
+# Asynchronous Service Functions (CRUD operations) 
+async def get_all_applications_by_seeker(session: AsyncSession, job_seeker_id: int, skip: int = 0, limit: int = 5) -> List[Applications]:
+    """
+    Fetches all applications for a given job seeker, eagerly loading job and company details.
+    
+    Raises:
+        JobSeekerProfileNotFound: If the job seeker profile does not exist.
+        HTTPException: For unexpected database errors (500).
+        
+    Returns:
+        List[Applications]: A list of application objects.
+    """
+    try:
+        job_seeker = await session.get(JobSeekers, job_seeker_id)
+        if job_seeker is None:
+            raise JobSeekerProfileNotFound() # If job seeker id is deleted as foreign key, raise error
+
+        statement = (
+        select(Applications)
+        .where(Applications.job_seeker_id == job_seeker_id)
+        .options(selectinload(Applications.job).selectinload(Listings.company))
+        .offset(skip)
+        .limit(limit)
+        )
+        result = await session.execute(statement)
+        return result.scalars().all()
+    except JobSeekerProfileNotFound:
+        raise
+    except SQLAlchemyError as e:
+        # Catch generic database errors
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
+                            detail=f"Database error while fetching applications: {e.__class__.__name__}")
+
+
+async def get_application_by_id(session: AsyncSession, application_id: int) -> Applications:
+    """
+    Fetches a single application by ID.
+    
+    Raises:
+        ApplicationNotFound: If the application is not found.
+        HTTPException: For unexpected database errors (500).
+        
+    Returns:
+        Applications: The application object.
+    """
+    try:
+        application_to_read = await session.get(Applications, application_id)
+        if application_to_read is None:
+            raise ApplicationNotFound(application_id)
+        return application_to_read
+    except ApplicationNotFound:
+        raise
+    except SQLAlchemyError as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
+                            detail=f"Database error while fetching application: {e.__class__.__name__}")
+
+async def create_new_application(session: AsyncSession, applicant_data: ApplicationsCreate, current_user: User) -> Applications:
+    """
+    Creates a new application after validation, commits, and returns the fully loaded object.
+    
+    Raises:
+        ListingNotFound, JobSeekerProfileNotFound: Propagated from sync helper.
+        HTTPException: For general database errors (500) or validation errors (400).
+        
+    Returns:
+        Applications: The fully loaded application object.
+    """
+    
+    db_applications = None
+    try:
+        # 1. Run sync validation logic (raises ListingNotFound or JobSeekerProfileNotFound)
+        db_applications = await session.run_sync(_validate_application_prerequisites_sync, applicant_data)
+        
+        # 2. Add and commit the application
+        session.add(db_applications)
+        await session.commit()
+        await session.refresh(db_applications)
+        
+        # 3. Eagerly load the created application for the response
+        stmt = (
+            select(Applications)
+            .where(Applications.application_id == db_applications.application_id)
+            .options(selectinload(Applications.job).selectinload(Listings.company))
+        )
+        result = await session.execute(stmt)
+        return result.scalar_one()
+
+    except (ListingNotFound, JobSeekerProfileNotFound):
+        raise 
+    except IntegrityError as e:
+        await session.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Integrity error: application already exists or invalid foreign key.")
+    except SQLAlchemyError as e:
+        await session.rollback()
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
+                            detail=f"Database error during application creation: {e.__class__.__name__}")
+
+async def update_existing_application(session: AsyncSession, application_id: int, update_data_filtered: Dict[str, Any], current_user: User) -> Applications:
+    """
+    Updates an existing application after validation, commits, and returns the fully loaded object.
+    
+    Raises:
+        ApplicationNotFound: If the application is not found.
+        AuthorizationError: If the user tries to update another user's application.
+        HTTPException: For general database errors (500).
+        
+    Returns:
+        Applications: The fully loaded, updated application object.
+    """
+    db_application = None
+    try:
+        application_to_update = await session.get(Applications, application_id)
+        if application_to_update is None:
+            raise ApplicationNotFound(application_id)
+        
+        # Authorization check (must occur before running sync update logic)
+        if current_user.job_seeker_profile is None or application_to_update.job_seeker_id != current_user.job_seeker_profile.job_seeker_id:
+            raise AuthorizationError(detail="Cannot update another user's application.")
+        
+        # 1. Run sync update logic (raises ApplicationNotFound if id is invalid)
+        db_application = await session.run_sync(
+            _update_application_data_sync,
+            application_id,
+            update_data_filtered
+        )
+        
+        # 2. Commit the changes
+        await session.commit()
+        await session.refresh(db_application)
+        
+        # 3. Eagerly load the updated application for the response
+        stmt = (
+            select(Applications)
+            .where(Applications.application_id == db_application.application_id)
+            .options(selectinload(Applications.job).selectinload(Listings.company))
+        )
+        result = await session.execute(stmt)
+        return result.scalar_one()
+        
+    except (ApplicationNotFound, AuthorizationError):
+        raise
+    except SQLAlchemyError as e:
+        await session.rollback()
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
+                            detail=f"Database error during application update: {e.__class__.__name__}")
+
+async def delete_application_by_id(session: AsyncSession, application_id: int, current_user: User) -> None:
+    """
+    Deletes an application by ID.
+    
+    Raises:
+        ApplicationNotFound: If the application is not found.
+        AuthorizationError: If the user tries to delete another user's application.
+        HTTPException: For general database errors (500).
+        
+    Returns:
+        None
+    """
+    try:
+        application_to_delete = await session.get(Applications, application_id)
+        if application_to_delete is None:
+            raise ApplicationNotFound(application_id)
+        
+        # Authorization check
+        if current_user.job_seeker_profile is None or application_to_delete.job_seeker_id != current_user.job_seeker_profile.job_seeker_id:
+            raise AuthorizationError(detail="Cannot delete another user's application.")
+            
+        # Perform deletion
+        await session.delete(application_to_delete)
+        await session.commit()
+        
+    except (ApplicationNotFound, AuthorizationError):
+        # Catch custom exceptions and re-raise
+        raise
+    except SQLAlchemyError as e:
+        # Catch general database errors
+        await session.rollback()
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
+                            detail=f"Database error during application deletion: {e.__class__.__name__}")
