@@ -55,7 +55,6 @@ def _update_seeker_profile_sync(session: AsyncSession, seeker_id: int, update_da
         
     update_data_dict = update_data.model_dump(exclude_unset=True) 
     seeker_update_db.sqlmodel_update(update_data_dict)
-    
     session.add(seeker_update_db)
     return seeker_update_db
 
