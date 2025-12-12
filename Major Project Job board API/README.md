@@ -48,7 +48,7 @@ You must create a postgres database the same as your env, before running alembic
 ### Running the server
 Once the prerequisites are met, The following steps can be used to get the application up and running. All commands are run from the root directory of the project
 ```bash
-uvicorn src.core.main:app --reload
+uvicorn main:app --reload
 ```
 ## API Reference
 
