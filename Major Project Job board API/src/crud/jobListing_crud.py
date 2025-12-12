@@ -37,7 +37,7 @@ def _create_listing_prerequisites_sync(session: AsyncSession, listing_data: List
     data_to_validate = listing_data.model_dump()
     data_to_validate['recruiter_id'] = recruiter_id # Correctly map listing to that recruiter_id
     db_listing = Listings.model_validate(data_to_validate)
-    return db_listing, None
+    return db_listing
 
 def _update_listing_data_sync(session: AsyncSession, listing_id: int, update_data_filtered: dict) -> Listings:
     """
@@ -57,7 +57,7 @@ def _update_listing_data_sync(session: AsyncSession, listing_id: int, update_dat
     temp_update = ListingsUpdate(**update_data_filtered) # Dict unpacking for selected updates
     update_data_dict = temp_update.model_dump(exclude_unset=True) # Use exclude_unset to omit values that are not changed
     listing_update_db.sqlmodel_update(update_data_dict) # Make changes in database
-    return listing_update_db, None
+    return listing_update_db
 
 # Asynchronous Service Functions (CRUD operations) 
 async def get_listings_by_tags(
@@ -100,9 +100,6 @@ async def get_listings_by_tags(
             )
 
         return listings
-    except HTTPException:
-        # Re-raise the intended HTTP 200 exception
-        raise
     except SQLAlchemyError as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
                             detail=f"Database error while fetching listings by tags: {e.__class__.__name__}")
@@ -123,8 +120,6 @@ async def get_listing_by_id(session: AsyncSession, listing_id: int) -> Listings:
         if listing_to_read is None: 
             raise ListingNotFound(listing_id)
         return listing_to_read
-    except ListingNotFound:
-        raise
     except SQLAlchemyError as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
                             detail=f"Database error while fetching listing by ID: {e.__class__.__name__}")
@@ -158,23 +153,19 @@ async def create_new_listing(session: AsyncSession, listing_data: ListingsCreate
     Returns:
         Listings: The newly created listing object.
     """
-    db_listing = None
     try:
-        # 1. Run sync validation and creation logic (raises RecruiterProfileNotFound or CompanyNotFound)
-        db_listing = await session.run_sync(
-            _create_listing_prerequisites_sync,
+        # 1. Run sync validation and creation logic 
+        db_listing: Listings = await session.run_sync(
+            _create_listing_prerequisites_sync, 
             listing_data,
             current_user.id
         )
-
-        # 2. Commit the listing
-        # session.add(db_listing) # Already added by sync helper
+        session.add(db_listing) 
         await session.commit()
         await session.refresh(db_listing)
         return db_listing
     
     except (RecruiterProfileNotFound, CompanyNotFound) as e:
-        # Catch custom exceptions raised by the sync helper
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except IntegrityError as e:
         await session.rollback()
@@ -205,7 +196,6 @@ async def update_existing_listing(session: AsyncSession, listing_id: int, update
         )
             
         # 2. Commit the changes
-        # session.add(listing_update_db) # Already added by sync helper
         await session.commit()
         await session.refresh(listing_update_db)
         return listing_update_db

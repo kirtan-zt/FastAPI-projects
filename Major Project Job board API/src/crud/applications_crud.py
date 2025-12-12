@@ -9,6 +9,7 @@ from src.models.jobSeekers import JobSeekers
 from src.models.users import User
 from src.core.exceptions import ApplicationNotFound, JobSeekerProfileNotFound, ListingNotFound, AuthorizationError
 from sqlalchemy.exc import SQLAlchemyError, IntegrityError
+from sqlalchemy import and_
 
 def _validate_application_prerequisites_sync(session: AsyncSession, applicant_data: ApplicationsCreate) -> Tuple[Optional[Applications], Optional[str]]:
     """
@@ -30,11 +31,23 @@ def _validate_application_prerequisites_sync(session: AsyncSession, applicant_da
     # 2. Check for existing job seeker
     seeker_exists = session.get(JobSeekers, applicant_data.job_seeker_id)
     if not seeker_exists:
-        return None, JobSeekerProfileNotFound()
+        raise JobSeekerProfileNotFound(applicant_data.job_seeker_id)
+    existing_application_stmt = select(Applications).where(
+        and_(
+            Applications.listing_id == applicant_data.listing_id,
+            Applications.job_seeker_id == applicant_data.job_seeker_id
+        )
+    )
+    existing_application = session.execute(existing_application_stmt).scalar_one_or_none()
 
+    if existing_application:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Job Seeker with ID {applicant_data.job_seeker_id} has already applied to Listing ID {applicant_data.listing_id}."
+        )
     # Validation passed, create the model instance
     db_applications = Applications.model_validate(applicant_data)
-    return db_applications, None
+    return db_applications
 
 def _update_application_data_sync(session: AsyncSession, application_id: int, update_data: Dict[str, Any]) -> Tuple[Optional[Applications], Optional[str], Optional[int]]:
     """
@@ -71,7 +84,7 @@ async def get_all_applications_by_seeker(session: AsyncSession, job_seeker_id: i
     try:
         job_seeker = await session.get(JobSeekers, job_seeker_id)
         if job_seeker is None:
-            raise JobSeekerProfileNotFound() # If job seeker id is deleted as foreign key, raise error
+            raise JobSeekerProfileNotFound(job_seeker_id) # If job seeker id is deleted as foreign key, raise error
 
         statement = (
         select(Applications)
@@ -82,8 +95,6 @@ async def get_all_applications_by_seeker(session: AsyncSession, job_seeker_id: i
         )
         result = await session.execute(statement)
         return result.scalars().all()
-    except JobSeekerProfileNotFound:
-        raise
     except SQLAlchemyError as e:
         # Catch generic database errors
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
@@ -106,8 +117,6 @@ async def get_application_by_id(session: AsyncSession, application_id: int) -> A
         if application_to_read is None:
             raise ApplicationNotFound(application_id)
         return application_to_read
-    except ApplicationNotFound:
-        raise
     except SQLAlchemyError as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
                             detail=f"Database error while fetching application: {e.__class__.__name__}")
@@ -127,7 +136,7 @@ async def create_new_application(session: AsyncSession, applicant_data: Applicat
     db_applications = None
     try:
         # 1. Run sync validation logic (raises ListingNotFound or JobSeekerProfileNotFound)
-        db_applications = await session.run_sync(_validate_application_prerequisites_sync, applicant_data)
+        db_applications: Applications = await session.run_sync(_validate_application_prerequisites_sync, applicant_data)
         
         # 2. Add and commit the application
         session.add(db_applications)
@@ -142,9 +151,11 @@ async def create_new_application(session: AsyncSession, applicant_data: Applicat
         )
         result = await session.execute(stmt)
         return result.scalar_one()
-
-    except (ListingNotFound, JobSeekerProfileNotFound):
-        raise 
+    
+    except (ListingNotFound, JobSeekerProfileNotFound) as e:
+        await session.rollback()
+        # These exceptions are subclasses of HTTPException, no need to wrap
+        raise e
     except IntegrityError as e:
         await session.rollback()
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Integrity error: application already exists or invalid foreign key.")
@@ -195,8 +206,6 @@ async def update_existing_application(session: AsyncSession, application_id: int
         result = await session.execute(stmt)
         return result.scalar_one()
         
-    except (ApplicationNotFound, AuthorizationError):
-        raise
     except SQLAlchemyError as e:
         await session.rollback()
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
@@ -226,12 +235,8 @@ async def delete_application_by_id(session: AsyncSession, application_id: int, c
         # Perform deletion
         await session.delete(application_to_delete)
         await session.commit()
-        
-    except (ApplicationNotFound, AuthorizationError):
-        # Catch custom exceptions and re-raise
-        raise
+
     except SQLAlchemyError as e:
-        # Catch general database errors
         await session.rollback()
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
                             detail=f"Database error during application deletion: {e.__class__.__name__}")

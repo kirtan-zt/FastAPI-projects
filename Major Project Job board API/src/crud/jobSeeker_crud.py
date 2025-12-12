@@ -55,6 +55,7 @@ def _update_seeker_profile_sync(session: AsyncSession, seeker_id: int, update_da
         
     update_data_dict = update_data.model_dump(exclude_unset=True) 
     seeker_update_db.sqlmodel_update(update_data_dict)
+    
     session.add(seeker_update_db)
     return seeker_update_db
 
@@ -130,8 +131,6 @@ async def profile_completion_count(session: AsyncSession, seeker_id: int) -> dic
             "experience_percentage": 100 if experience_is_complete else 0,
             "skills_percentage": 100 if skills_is_complete else 0,
         }
-    except JobSeekerProfileNotFound:
-        raise
     except SQLAlchemyError as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
                             detail=f"Database error while calculating profile completion: {e.__class__.__name__}")
@@ -170,8 +169,6 @@ async def get_seeker_by_id(session: AsyncSession, seeker_id: int) -> JobSeekers:
         if seeker_to_read is None:
             raise JobSeekerProfileNotFound(seeker_id)
         return seeker_to_read
-    except JobSeekerProfileNotFound:
-        raise
     except SQLAlchemyError as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
                             detail=f"Database error while fetching job seeker profile: {e.__class__.__name__}")
@@ -201,9 +198,6 @@ async def create_new_seeker_profile(session: AsyncSession, seeker_data: JobSeeke
         await session.refresh(db_seeker)
         return db_seeker
         
-    except HTTPException:
-        # Catch the HTTPException raised by the sync helper and re-raise
-        raise
     except IntegrityError as e:
         await session.rollback()
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Integrity error: profile data already exists or invalid user ID.")

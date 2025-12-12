@@ -123,9 +123,6 @@ async def delete_listing(
     current_user: User = Depends(get_current_user),
     ):  
     await jobListing_crud.delete_listing_by_id(session, listing_id, current_user)
-    return JSONResponse(
-        status_code=status.HTTP_204_NO_CONTENT, 
-        content={
-            "message": "Job listing successfully deleted"
-        }
-    )
+    return JSONResponse(status_code=status.HTTP_204_NO_CONTENT, content={
+        "message": "Job listing successfully deleted"
+    })

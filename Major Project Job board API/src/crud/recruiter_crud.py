@@ -7,7 +7,8 @@ from src.models.users import User
 from src.core.exceptions import RecruiterProfileNotFound, AuthorizationError
 from sqlalchemy.exc import SQLAlchemyError, IntegrityError 
 
-# Helper Functions (Synchronous, Raising Exceptions) 
+# --- Helper Functions (Synchronous, Raising Exceptions) ---
+
 def _create_recruiter_profile_sync(session: AsyncSession, user_id: int, recruit_data: RecruitersCreate) -> Recruiters:
     """
     Synchronous validation and data preparation for creating a recruiter profile.
@@ -28,6 +29,7 @@ def _create_recruiter_profile_sync(session: AsyncSession, user_id: int, recruit_
     data_to_validate = recruit_data.model_dump()
     data_to_validate['user_id'] = user_id 
     data_to_validate['email'] = user.email 
+    
     db_recruiter = Recruiters.model_validate(data_to_validate)
     return db_recruiter
 
@@ -59,7 +61,7 @@ def _update_recruiter_profile_sync(
     session.add(recruiter_update_db)
     return recruiter_update_db
 
-# Asynchronous Service Functions (CRUD operations) 
+# --- Asynchronous Service Functions (CRUD operations) ---
 
 async def get_all_recruiters(session: AsyncSession, skip: int = 0, limit: int = 5) -> List[Recruiters]:
     """
@@ -95,8 +97,6 @@ async def get_recruiter_by_id(session: AsyncSession, recruiter_id: int) -> Recru
         if recruiter_to_read is None:
             raise RecruiterProfileNotFound(recruiter_id)
         return recruiter_to_read
-    except RecruiterProfileNotFound:
-        raise
     except SQLAlchemyError as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
                             detail=f"Database error while fetching recruiter profile: {e.__class__.__name__}")
@@ -125,10 +125,7 @@ async def create_new_recruiter_profile(session: AsyncSession, recruit_data: Recr
         await session.commit()
         await session.refresh(db_recruiter)
         return db_recruiter
-        
-    except HTTPException:
-        # Catch the HTTPException raised by the sync helper and re-raise
-        raise
+
     except IntegrityError as e:
         await session.rollback()
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Integrity error: profile already exists or invalid data.")
@@ -157,13 +154,15 @@ async def update_existing_recruiter_profile(
     db_recruiter = None
     update_data_dict = profile_update
     try:
-        # Run sync update logic 
+        # 1. Run sync update logic 
         db_recruiter = await session.run_sync(
             _update_recruiter_profile_sync,
             recruiter_id,
             update_data_dict,
             current_user.id
         )
+
+        # 2. Commit the changes
         await session.commit()
         await session.refresh(db_recruiter)
         return db_recruiter

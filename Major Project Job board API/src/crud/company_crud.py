@@ -110,8 +110,6 @@ async def get_company_by_id(session: AsyncSession, company_id: int) -> Company:
         if company_to_read is None:
             raise CompanyNotFound(company_id)
         return company_to_read
-    except CompanyNotFound:
-        raise
     except SQLAlchemyError as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
                             detail=f"Database error while fetching company: {e.__class__.__name__}")
