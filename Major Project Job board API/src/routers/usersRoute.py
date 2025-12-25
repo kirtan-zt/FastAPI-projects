@@ -2,12 +2,13 @@ from fastapi import APIRouter, HTTPException, Depends, status, Form
 from typing import List, Annotated
 from pydantic import EmailStr
 from src.core.database import get_session
-from src.models.users import User, UserBase, UserCreate, UserRead, Token, roles, UserResponseWrapper
+from src.models.users import User, UserBase, UserCreate, UserRead, Token, roles, UserResponseWrapper, UserReadWithProfile
 from sqlmodel import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from src.core import auth
 from src.core.dependencies import get_current_user
+from sqlalchemy.orm import selectinload
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -53,6 +54,18 @@ async def login_for_access_token(form_data: OAuth2PasswordRequestForm=Depends(),
         access_token=access_token,
         token_type="bearer"
         ) 
+
+# Checks who is logged in: Job Seeker or Recruiter
+@router.get("/me", response_model=UserReadWithProfile)
+async def get_user_me(current_user: User = Depends(get_current_user), session: AsyncSession = Depends(get_session)):
+    """Get current user's profile for frontend visibility"""
+    result = await session.execute(
+        select(User)
+        .where(User.id == current_user.id)
+        .options(selectinload(User.recruiter_profile))
+    )
+    user_with_data = result.scalar_one_or_none()
+    return user_with_data
 
 # Method to delete a user from database
 @router.delete("/me", status_code=status.HTTP_204_NO_CONTENT, summary="Delete the currently logged user's account")

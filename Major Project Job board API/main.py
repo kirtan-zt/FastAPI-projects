@@ -90,7 +90,7 @@ except AttributeError as e:
 
 ROLE_MAP = {
     r"/recruiters(/.*)?$": [roles.recruiter], 
-    r"/applications(/.*)?$": [roles.job_seeker], 
+    r"/applications(/.*)?$": [roles.recruiter, roles.job_seeker], 
     r"/seekers(/.*)?$": [roles.job_seeker], 
     r"/listings(/.*)?$": [roles.recruiter, roles.job_seeker], 
     r"/companies(/.*)?$": [roles.recruiter, roles.job_seeker],

@@ -89,7 +89,10 @@ async def get_all_applications_by_seeker(session: AsyncSession, job_seeker_id: i
         statement = (
         select(Applications)
         .where(Applications.job_seeker_id == job_seeker_id)
-        .options(selectinload(Applications.job).selectinload(Listings.company))
+        .options(
+            selectinload(Applications.job).selectinload(Listings.company),
+            selectinload(Applications.job_seeker)
+        )
         .offset(skip)
         .limit(limit)
         )
@@ -100,6 +103,20 @@ async def get_all_applications_by_seeker(session: AsyncSession, job_seeker_id: i
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
                             detail=f"Database error while fetching applications: {e.__class__.__name__}")
 
+async def get_applications_for_recruiter(session: AsyncSession, recruiter_user_id: int, skip: int, limit: int):
+    """Function to view received applications from seekers for a particular listing"""
+    statement = (
+        select(Applications)
+        .join(Listings)
+        .where(Listings.recruiter_id == recruiter_user_id) # Ensure your Listings table has recruiter_id
+        .options(
+            selectinload(Applications.job).selectinload(Listings.company),
+            selectinload(Applications.job_seeker)
+        )
+        .offset(skip).limit(limit)
+    )
+    result = await session.execute(statement)
+    return result.scalars().all()
 
 async def get_application_by_id(session: AsyncSession, application_id: int) -> Applications:
     """
@@ -147,7 +164,10 @@ async def create_new_application(session: AsyncSession, applicant_data: Applicat
         stmt = (
             select(Applications)
             .where(Applications.application_id == db_applications.application_id)
-            .options(selectinload(Applications.job).selectinload(Listings.company))
+            .options(
+                selectinload(Applications.job).selectinload(Listings.company),
+                selectinload(Applications.job_seeker)
+                )
         )
         result = await session.execute(stmt)
         return result.scalar_one()
@@ -176,18 +196,35 @@ async def update_existing_application(session: AsyncSession, application_id: int
     Returns:
         Applications: The fully loaded, updated application object.
     """
-    db_application = None
     try:
-        application_to_update = await session.get(Applications, application_id)
+        # Load application with the related job listing to check recruiter ownership
+        statement = (
+            select(Applications)
+            .where(Applications.application_id == application_id)
+            .options(selectinload(Applications.job))
+        )
+        result = await session.execute(statement)
+        application_to_update = result.scalar_one_or_none()
+
         if application_to_update is None:
             raise ApplicationNotFound(application_id)
         
-        # Authorization check (must occur before running sync update logic)
-        if current_user.job_seeker_profile is None or application_to_update.job_seeker_id != current_user.job_seeker_profile.job_seeker_id:
-            raise AuthorizationError(detail="Cannot update another user's application.")
+        is_seeker_owner = (
+            current_user.role == "Job Seeker" and 
+            current_user.job_seeker_profile and 
+            application_to_update.job_seeker_id == current_user.job_seeker_profile.job_seeker_id
+        )
         
-        # 1. Run sync update logic (raises ApplicationNotFound if id is invalid)
-        db_application = await session.run_sync(
+        is_recruiter_owner = (
+            current_user.role == "Recruiter" and 
+            current_user.recruiter_profile and 
+            application_to_update.job.recruiter_id == current_user.recruiter_profile.recruiter_id
+        )
+
+        if not (is_seeker_owner or is_recruiter_owner):
+            raise AuthorizationError(detail="You are not authorized to update this application status.")
+        
+        db_application, _, _ = await session.run_sync(
             _update_application_data_sync,
             application_id,
             update_data_filtered
@@ -197,11 +234,14 @@ async def update_existing_application(session: AsyncSession, application_id: int
         await session.commit()
         await session.refresh(db_application)
         
-        # 3. Eagerly load the updated application for the response
+        # 3. Eagerly load full data for frontend
         stmt = (
             select(Applications)
             .where(Applications.application_id == db_application.application_id)
-            .options(selectinload(Applications.job).selectinload(Listings.company))
+            .options(
+                selectinload(Applications.job).selectinload(Listings.company),
+                selectinload(Applications.job_seeker)
+            )
         )
         result = await session.execute(stmt)
         return result.scalar_one()
@@ -210,6 +250,43 @@ async def update_existing_application(session: AsyncSession, application_id: int
         await session.rollback()
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
                             detail=f"Database error during application update: {e.__class__.__name__}")
+    # db_application = None
+    # try:
+    #     application_to_update = await session.get(Applications, application_id)
+    #     if application_to_update is None:
+    #         raise ApplicationNotFound(application_id)
+        
+    #     # Authorization check (must occur before running sync update logic)
+    #     if current_user.job_seeker_profile is None or application_to_update.job_seeker_id != current_user.job_seeker_profile.job_seeker_id:
+    #         raise AuthorizationError(detail="Cannot update another user's application.")
+        
+    #     # 1. Run sync update logic (raises ApplicationNotFound if id is invalid)
+    #     db_application = await session.run_sync(
+    #         _update_application_data_sync,
+    #         application_id,
+    #         update_data_filtered
+    #     )
+        
+    #     # 2. Commit the changes
+    #     await session.commit()
+    #     await session.refresh(db_application)
+        
+    #     # 3. Eagerly load the updated application for the response
+    #     stmt = (
+    #         select(Applications)
+    #         .where(Applications.application_id == db_application.application_id)
+    #         .options(
+    #             selectinload(Applications.job).selectinload(Listings.company),
+    #             selectinload(Applications.job_seeker)
+    #             )
+    #     )
+    #     result = await session.execute(stmt)
+    #     return result.scalar_one()
+        
+    # except SQLAlchemyError as e:
+    #     await session.rollback()
+    #     raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
+    #                         detail=f"Database error during application update: {e.__class__.__name__}")
 
 async def delete_application_by_id(session: AsyncSession, application_id: int, current_user: User) -> None:
     """

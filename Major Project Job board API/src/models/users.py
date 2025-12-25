@@ -2,6 +2,8 @@ from sqlmodel import Field, SQLModel, Relationship
 from enum import Enum
 from pydantic import EmailStr
 from typing import Optional
+from src.models.recruiters import RecruitersRead
+from src.models.jobSeekers import JobSeekersRead
 class roles(str, Enum):
     job_seeker="Job Seeker"
     recruiter="Recruiter"
@@ -31,6 +33,10 @@ class UserRead(UserBase):
 class UserResponseWrapper(SQLModel):
     message: str
     data: UserRead
+
+class UserReadWithProfile(UserRead):
+    recruiter_profile: Optional[RecruitersRead] = None
+    job_seeker_profile: Optional[JobSeekersRead] = None
 
 # JSON payload containing access token
 class Token(SQLModel):

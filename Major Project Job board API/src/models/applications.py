@@ -4,6 +4,7 @@ from enum import Enum
 from datetime import date
 from src.models.jobListings import ListingReadForApplication
 from src.models.companies import CompanyReadMinimal
+from src.models.jobSeekers import JobSeekersRead
 
 class application_status(str, Enum):
     pending="Pending"
@@ -42,6 +43,7 @@ class ApplicationsUpdate(SQLModel):
 # Request model to get applications
 class ApplicationsRead(ApplicationsBase):
     job: Optional[ListingReadForApplication]
+    job_seeker: Optional[JobSeekersRead]
     application_id: int
     listing_id: int
     job_seeker_id: int

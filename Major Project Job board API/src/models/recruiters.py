@@ -29,9 +29,12 @@ class RecruitersCreate(RecruitersBase):
 # Request model to get recruiters profile
 class RecruitersRead(RecruitersBase):
     recruiter_id: int
+    user_id: int        
+    company_id: int     
     first_name: str
     last_name: str
     phone_number: str
+    position: str
 
 # Schema to wrap the RecruitersRead data with a custom success message.
 class RecruiterResponseWrapper(SQLModel):

@@ -44,6 +44,10 @@ class JobSeekersRead(JobSeekersBase):
     first_name: str
     last_name: str
     phone_number: str
+    location: str 
+    current_salary: int
+    past_experience: Optional[str] = None
+    skill_set: Optional[str] = None
 
 # Schema to wrap the JobSeekerRead data with a custom success message. 
 class JobSeekerResponseWrapper(SQLModel):
