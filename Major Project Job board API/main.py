@@ -1,5 +1,5 @@
 from fastapi import FastAPI
-from src.routers import applicationsRoute_router, companiesRoute_router, jobListingsRoute_router, jobSeekersRoute_router, recruitersRoute_router, usersRoute_router, chatbotRoute_router
+from src.routers import applicationsRoute_router, companiesRoute_router, jobListingsRoute_router, jobSeekersRoute_router, recruitersRoute_router, usersRoute_router
 from src.core.middleware import log_request_response_middleware, RoleAuthorizationMiddleware
 from sqlmodel import SQLModel
 from src.core.dependencies import get_current_user, RoleChecker
@@ -43,7 +43,6 @@ app.include_router(jobListingsRoute_router)
 app.include_router(jobSeekersRoute_router)
 app.include_router(recruitersRoute_router)
 app.include_router(usersRoute_router)
-app.include_router(chatbotRoute_router)
 
 # Introduction message on home page
 @app.get("/")
